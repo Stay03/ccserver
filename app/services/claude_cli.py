@@ -31,7 +31,6 @@ def _build_command(request: MessagesRequest, streaming: bool) -> list[str]:
         "stream-json" if streaming else "json",
         "--model",
         model,
-        "--bare",
     ]
     if streaming:
         cmd.append("--verbose")
