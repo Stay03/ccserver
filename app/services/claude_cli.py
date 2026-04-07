@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections.abc import AsyncGenerator
 
 from app.config import settings
+from app.models.metrics import build_metrics_from_result
 from app.models.request import MessagesRequest
 from app.models.response import MessagesResponse
 from app.services.converter import (
@@ -75,14 +77,22 @@ async def run_claude(request: MessagesRequest) -> MessagesResponse:
 
     result_event = json.loads(output)
 
+    # Issue C fix: log error requests to DB before raising
     if result_event.get("is_error"):
+        metrics = build_metrics_from_result(
+            result_event, is_stream=False, fallback_model=model,
+        )
+        await _insert_metrics(metrics)
         error_msg = result_event.get("result", "Unknown CLI error")
         raise RuntimeError(f"Claude CLI error: {error_msg}")
 
-    return parse_cli_result(result_event, model)
+    response, metrics = parse_cli_result(result_event, model)
+    await _insert_metrics(metrics)
+    return response
 
 
 async def stream_claude(request: MessagesRequest) -> AsyncGenerator[str, None]:
+    model = request.model or settings.default_model
     cmd = _build_command(request, streaming=True)
 
     try:
@@ -99,6 +109,10 @@ async def stream_claude(request: MessagesRequest) -> AsyncGenerator[str, None]:
         return
 
     error_emitted = False
+    start_time = time.monotonic()
+    ttft_ms: int | None = None
+    first_delta_seen = False
+    pending_metrics: build_metrics_from_result | None = None
 
     try:
         async for raw_line in proc.stdout:
@@ -117,6 +131,10 @@ async def stream_claude(request: MessagesRequest) -> AsyncGenerator[str, None]:
             if event_type == "stream_event":
                 inner = event.get("event")
                 if inner and "type" in inner:
+                    # TTFT: timestamp first content delta
+                    if not first_delta_seen and inner["type"] == "content_block_delta":
+                        ttft_ms = int((time.monotonic() - start_time) * 1000)
+                        first_delta_seen = True
                     yield format_sse(inner["type"], inner)
 
             elif event_type == "assistant":
@@ -138,6 +156,14 @@ async def stream_claude(request: MessagesRequest) -> AsyncGenerator[str, None]:
                         "error": {"type": "api_error", "message": event.get("result", "Unknown error")},
                     })
 
+                # Build metrics to insert in finally block (Issue B fix)
+                pending_metrics = build_metrics_from_result(
+                    event,
+                    is_stream=True,
+                    fallback_model=model,
+                    ttft_ms=ttft_ms,
+                )
+
             elif event_type in ("system", "rate_limit_event"):
                 pass
 
@@ -147,6 +173,18 @@ async def stream_claude(request: MessagesRequest) -> AsyncGenerator[str, None]:
             "error": {"type": "api_error", "message": "Request timed out"},
         })
     finally:
+        # Issue B fix: insert metrics in finally so it runs even on client disconnect
+        if pending_metrics is not None:
+            await _insert_metrics(pending_metrics)
         if proc.returncode is None:
             proc.kill()
             await proc.wait()
+
+
+async def _insert_metrics(metrics) -> None:
+    """Insert metrics to database. Import here to avoid circular imports at module level."""
+    try:
+        from app import database
+        await database.insert_request_log(metrics)
+    except Exception:
+        logger.exception("Failed to log request metrics")

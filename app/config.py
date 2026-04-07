@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     max_budget_usd: float | None = None
     request_timeout: int = 300
     api_key: str = ""
+    db_path: str = "claude_proxy.db"
 
     model_config = {"env_file": ".env", "env_prefix": "CLAUDE_PROXY_"}
 

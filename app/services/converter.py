@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 
+from app.models.metrics import RequestMetrics, build_metrics_from_result
 from app.models.request import Message, MessagesRequest, SystemBlock
 from app.models.response import ContentBlock, MessagesResponse, Usage
 
@@ -58,7 +59,7 @@ def resolve_model(result_event: dict, fallback: str) -> str:
     return fallback
 
 
-def parse_cli_result(result_event: dict, model: str) -> MessagesResponse:
+def parse_cli_result(result_event: dict, model: str) -> tuple[MessagesResponse, RequestMetrics]:
     resolved = resolve_model(result_event, model)
     session_id = result_event.get("session_id", "")
     msg_id = f"msg_{session_id}" if session_id else f"msg_{uuid.uuid4().hex}"
@@ -66,7 +67,7 @@ def parse_cli_result(result_event: dict, model: str) -> MessagesResponse:
     usage_data = result_event.get("usage", {})
     stop_reason = map_stop_reason(result_event.get("stop_reason"))
 
-    return MessagesResponse(
+    response = MessagesResponse(
         id=msg_id,
         model=resolved,
         content=[ContentBlock(type="text", text=result_text)],
@@ -74,5 +75,13 @@ def parse_cli_result(result_event: dict, model: str) -> MessagesResponse:
         usage=Usage(
             input_tokens=usage_data.get("input_tokens", 0),
             output_tokens=usage_data.get("output_tokens", 0),
+            cache_creation_input_tokens=usage_data.get("cache_creation_input_tokens", 0),
+            cache_read_input_tokens=usage_data.get("cache_read_input_tokens", 0),
         ),
     )
+
+    metrics = build_metrics_from_result(
+        result_event, is_stream=False, fallback_model=model,
+    )
+
+    return response, metrics

@@ -101,33 +101,43 @@ class TestResolveModel:
         assert resolve_model(event, "opus") == "opus"
 
 
+def _make_cli_result(**overrides):
+    """Build a realistic CLI result event matching confirmed live output."""
+    event = {
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "result": "Hello! How can I help?",
+        "stop_reason": "end_turn",
+        "session_id": "50f85a80-7ef8-4ce9-8163-2c64db7e19e4",
+        "total_cost_usd": 0.020567,
+        "duration_ms": 1517,
+        "duration_api_ms": 1421,
+        "num_turns": 1,
+        "usage": {
+            "input_tokens": 3,
+            "output_tokens": 12,
+            "cache_creation_input_tokens": 4552,
+            "cache_read_input_tokens": 11027,
+        },
+        "modelUsage": {
+            "claude-sonnet-4-6": {
+                "inputTokens": 3,
+                "outputTokens": 12,
+                "costUSD": 0.020567,
+            }
+        },
+    }
+    event.update(overrides)
+    return event
+
+
 class TestParseCliResult:
     def test_successful_result(self):
-        event = {
-            "type": "result",
-            "subtype": "success",
-            "is_error": False,
-            "result": "Hello! How can I help?",
-            "stop_reason": "end_turn",
-            "session_id": "50f85a80-7ef8-4ce9-8163-2c64db7e19e4",
-            "total_cost_usd": 0.020567,
-            "duration_ms": 1517,
-            "duration_api_ms": 1421,
-            "usage": {
-                "input_tokens": 3,
-                "output_tokens": 12,
-                "cache_creation_input_tokens": 4552,
-                "cache_read_input_tokens": 11027,
-            },
-            "modelUsage": {
-                "claude-sonnet-4-6": {
-                    "inputTokens": 3,
-                    "outputTokens": 12,
-                    "costUSD": 0.020567,
-                }
-            },
-        }
-        response = parse_cli_result(event, "sonnet")
+        event = _make_cli_result()
+        response, metrics = parse_cli_result(event, "sonnet")
+
+        # Response assertions
         assert response.model == "claude-sonnet-4-6"
         assert response.role == "assistant"
         assert response.type == "message"
@@ -136,16 +146,57 @@ class TestParseCliResult:
         assert response.stop_reason == "end_turn"
         assert response.usage.input_tokens == 3
         assert response.usage.output_tokens == 12
+        assert response.usage.cache_creation_input_tokens == 4552
+        assert response.usage.cache_read_input_tokens == 11027
         assert response.id == "msg_50f85a80-7ef8-4ce9-8163-2c64db7e19e4"
 
+        # Metrics assertions
+        assert metrics.model == "claude-sonnet-4-6"
+        assert metrics.total_cost_usd == 0.020567
+        assert metrics.duration_ms == 1517
+        assert metrics.duration_api_ms == 1421
+        assert metrics.tokens_per_second > 0
+        assert metrics.input_tokens == 3
+        assert metrics.output_tokens == 12
+        assert metrics.cache_creation_input_tokens == 4552
+        assert metrics.cache_read_input_tokens == 11027
+        assert metrics.is_stream is False
+        assert metrics.is_error is False
+        assert metrics.num_turns == 1
+        assert metrics.session_id == "50f85a80-7ef8-4ce9-8163-2c64db7e19e4"
+
     def test_result_with_no_usage(self):
-        event = {"type": "result", "result": "hi", "session_id": "x"}
-        response = parse_cli_result(event, "opus")
+        event = _make_cli_result(usage={}, modelUsage={})
+        response, metrics = parse_cli_result(event, "opus")
         assert response.usage.input_tokens == 0
         assert response.usage.output_tokens == 0
         assert response.model == "opus"
+        assert metrics.model == "opus"
+        assert metrics.tokens_per_second == 0.0
 
     def test_result_with_no_session_id(self):
-        event = {"type": "result", "result": "hi"}
-        response = parse_cli_result(event, "haiku")
+        event = _make_cli_result(session_id="")
+        del event["session_id"]
+        response, metrics = parse_cli_result(event, "haiku")
         assert response.id.startswith("msg_")
+        assert metrics.request_id.startswith("msg_")
+
+    def test_error_result(self):
+        event = _make_cli_result(
+            is_error=True,
+            result="Not logged in",
+            total_cost_usd=0,
+            duration_api_ms=0,
+            modelUsage={},
+            usage={},
+        )
+        response, metrics = parse_cli_result(event, "sonnet")
+        assert metrics.is_error is True
+        assert metrics.total_cost_usd == 0.0
+        assert metrics.tokens_per_second == 0.0
+        assert metrics.model == "sonnet"
+
+    def test_null_cost_handled(self):
+        event = _make_cli_result(total_cost_usd=None)
+        _, metrics = parse_cli_result(event, "sonnet")
+        assert metrics.total_cost_usd == 0.0
