@@ -9,6 +9,7 @@ from app.database import get_db
 router = APIRouter()
 
 BUCKET_FORMATS = {
+    "5min": "5min",  # handled specially in SQL
     "hour": "%Y-%m-%dT%H:00:00",
     "day": "%Y-%m-%d",
 }
@@ -179,7 +180,7 @@ async def get_stats(
 
 @router.get("/v1/stats/timeseries")
 async def get_timeseries(
-    bucket: str = Query("day", pattern="^(hour|day)$"),
+    bucket: str = Query("day", pattern="^(5min|hour|day)$"),
     model: str | None = None,
     origin: str | None = None,
     since: str | None = None,
@@ -187,23 +188,45 @@ async def get_timeseries(
 ):
     db = _check_db()
     where, params = _build_where(model, origin, since, until)
-    fmt = BUCKET_FORMATS[bucket]
 
-    ts_sql = f"""
-    SELECT
-        strftime(?, timestamp) as period,
-        COUNT(*) as requests,
-        COALESCE(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END), 0) as errors,
-        COALESCE(SUM(total_cost_usd), 0) as cost_usd,
-        COALESCE(SUM(input_tokens), 0) as input_tokens,
-        COALESCE(SUM(output_tokens), 0) as output_tokens,
-        AVG(CASE WHEN is_error = 0 AND tokens_per_second > 0 THEN tokens_per_second END) as avg_tps,
-        AVG(CASE WHEN is_error = 0 THEN duration_ms END) as avg_duration_ms
-    FROM request_logs WHERE {where}
-    GROUP BY period
-    ORDER BY period
-    """
-    cursor = await db.execute(ts_sql, [fmt] + params)
+    if bucket == "5min":
+        period_expr = (
+            "strftime('%Y-%m-%dT%H:', timestamp) || "
+            "substr('0' || ((cast(strftime('%M', timestamp) as integer) / 5) * 5), -2)"
+        )
+        ts_sql = f"""
+        SELECT
+            {period_expr} as period,
+            COUNT(*) as requests,
+            COALESCE(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END), 0) as errors,
+            COALESCE(SUM(total_cost_usd), 0) as cost_usd,
+            COALESCE(SUM(input_tokens), 0) as input_tokens,
+            COALESCE(SUM(output_tokens), 0) as output_tokens,
+            AVG(CASE WHEN is_error = 0 AND tokens_per_second > 0 THEN tokens_per_second END) as avg_tps,
+            AVG(CASE WHEN is_error = 0 THEN duration_ms END) as avg_duration_ms
+        FROM request_logs WHERE {where}
+        GROUP BY period
+        ORDER BY period
+        """
+        cursor = await db.execute(ts_sql, params)
+    else:
+        fmt = BUCKET_FORMATS[bucket]
+        ts_sql = f"""
+        SELECT
+            strftime(?, timestamp) as period,
+            COUNT(*) as requests,
+            COALESCE(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END), 0) as errors,
+            COALESCE(SUM(total_cost_usd), 0) as cost_usd,
+            COALESCE(SUM(input_tokens), 0) as input_tokens,
+            COALESCE(SUM(output_tokens), 0) as output_tokens,
+            AVG(CASE WHEN is_error = 0 AND tokens_per_second > 0 THEN tokens_per_second END) as avg_tps,
+            AVG(CASE WHEN is_error = 0 THEN duration_ms END) as avg_duration_ms
+        FROM request_logs WHERE {where}
+        GROUP BY period
+        ORDER BY period
+        """
+        cursor = await db.execute(ts_sql, [fmt] + params)
+
     rows = await cursor.fetchall()
 
     data = []

@@ -79,7 +79,19 @@
                 <option value="true">Streaming</option>
                 <option value="false">Non-streaming</option>
             </select>
+            <!-- Time range presets -->
+            <div class="flex items-center gap-1 ml-auto">
+                <template x-for="opt in timeRangeOptions" :key="opt.label">
+                    <button @click="setTimeRange(opt.label)"
+                            class="px-2.5 py-1 text-xs font-medium rounded transition-all"
+                            :style="timeRange === opt.label
+                                ? 'background: var(--accent); color: white;'
+                                : 'background: var(--bg-tertiary); color: var(--text-secondary); cursor: pointer;'"
+                            x-text="opt.label"></button>
+                </template>
+            </div>
             <select x-model="bucketFilter" @change="applyFilters()" class="filter-select">
+                <option value="5min">5 min</option>
                 <option value="hour">Hourly</option>
                 <option value="day">Daily</option>
             </select>

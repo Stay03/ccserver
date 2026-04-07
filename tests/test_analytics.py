@@ -297,6 +297,22 @@ async def test_timeseries_hour_bucket(client):
 
 
 @pytest.mark.anyio
+async def test_timeseries_5min_bucket(client):
+    await _seed_data()
+    resp = await client.get("/v1/stats/timeseries", params={"bucket": "5min"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["bucket"] == "5min"
+    # Data spans 10:00, 10:30, 11:00, 11:30 on apr 7 + 09:00 on apr 8
+    # At 5min granularity, each timestamp falls in its own 5min bucket
+    assert len(data["data"]) >= 4
+    # Periods should look like "2026-04-07T10:00" format
+    for d in data["data"]:
+        assert "T" in d["period"]
+        assert len(d["period"]) >= 16  # "2026-04-07T10:00"
+
+
+@pytest.mark.anyio
 async def test_timeseries_invalid_bucket(client):
     resp = await client.get("/v1/stats/timeseries", params={"bucket": "week"})
     assert resp.status_code == 422

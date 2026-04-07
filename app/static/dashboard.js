@@ -104,7 +104,18 @@ function dashboardApp() {
         modelFilter: '',
         originFilter: '',
         streamFilter: '',
-        bucketFilter: 'day',
+        bucketFilter: 'hour',
+        timeRange: '24h',
+
+        // Time range presets
+        timeRangeOptions: [
+            { label: '1h', hours: 1, bucket: '5min' },
+            { label: '6h', hours: 6, bucket: '5min' },
+            { label: '24h', hours: 24, bucket: 'hour' },
+            { label: '7d', hours: 168, bucket: 'day' },
+            { label: '30d', hours: 720, bucket: 'day' },
+            { label: 'All', hours: 0, bucket: 'day' },
+        ],
 
         // Pagination
         page: 1,
@@ -122,6 +133,23 @@ function dashboardApp() {
             await this.refresh();
         },
 
+        setTimeRange(label) {
+            this.timeRange = label;
+            const preset = this.timeRangeOptions.find(o => o.label === label);
+            if (preset) {
+                this.bucketFilter = preset.bucket;
+            }
+            this.page = 1;
+            this.refresh();
+        },
+
+        _getSinceParam() {
+            const preset = this.timeRangeOptions.find(o => o.label === this.timeRange);
+            if (!preset || preset.hours === 0) return null;
+            const since = new Date(Date.now() - preset.hours * 60 * 60 * 1000);
+            return since.toISOString();
+        },
+
         async refresh() {
             this.loading = true;
             this.error = null;
@@ -129,6 +157,8 @@ function dashboardApp() {
                 const filterParams = {};
                 if (this.modelFilter) filterParams.model = this.modelFilter;
                 if (this.originFilter) filterParams.origin = this.originFilter;
+                const since = this._getSinceParam();
+                if (since) filterParams.since = since;
 
                 const [stats, logs, timeseries] = await Promise.all([
                     fetchStats(filterParams),
