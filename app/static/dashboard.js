@@ -99,6 +99,7 @@ function dashboardApp() {
         loading: true,
         error: null,
         activeTab: 'overview',
+        isDark: document.documentElement.classList.contains('dark'),
 
         // Filters
         modelFilter: '',
@@ -178,8 +179,7 @@ function dashboardApp() {
                 this.logs = logs;
                 this.timeseries = timeseries;
 
-                // Use setTimeout to ensure canvas elements are fully rendered
-                setTimeout(() => this.renderCharts(), 50);
+                this.renderCharts();
             } catch (e) {
                 this.error = e.message;
                 console.error('Dashboard refresh error:', e);
@@ -219,8 +219,21 @@ function dashboardApp() {
         /* ---------- Chart rendering ---------- */
 
         renderCharts() {
-            if (!this.timeseries || !this.timeseries.data.length) return;
+            if (!this.timeseries || !this.timeseries.data.length) {
+                this._destroyCharts();
+                return;
+            }
 
+            // Wait for next animation frame to ensure canvases are in DOM
+            requestAnimationFrame(() => this._drawCharts());
+        },
+
+        _destroyCharts() {
+            if (this.tpsChart) { this.tpsChart.destroy(); this.tpsChart = null; }
+            if (this.costChart) { this.costChart.destroy(); this.costChart = null; }
+        },
+
+        _drawCharts() {
             const data = this.timeseries.data;
             const labels = data.map(d => d.period);
             const isDark = document.documentElement.classList.contains('dark');
@@ -230,74 +243,76 @@ function dashboardApp() {
             const chartDefaults = {
                 responsive: true,
                 maintainAspectRatio: false,
+                animation: { duration: 300 },
                 plugins: {
                     legend: { labels: { color: textColor, font: { size: 12 } } },
                 },
                 scales: {
-                    x: { ticks: { color: textColor, font: { size: 11 } }, grid: { color: gridColor } },
-                    y: { ticks: { color: textColor, font: { size: 11 } }, grid: { color: gridColor } },
+                    x: { ticks: { color: textColor, font: { size: 11 }, maxRotation: 45 }, grid: { color: gridColor } },
+                    y: { ticks: { color: textColor, font: { size: 11 } }, grid: { color: gridColor }, beginAtZero: true },
                 },
             };
 
             // TPS chart
             const tpsCanvas = document.getElementById('tps-chart');
-            if (tpsCanvas) {
-                if (this.tpsChart) this.tpsChart.destroy();
-                this.tpsChart = new Chart(tpsCanvas, {
-                    type: 'line',
-                    data: {
-                        labels,
-                        datasets: [{
-                            label: 'Avg Tokens/sec',
-                            data: data.map(d => d.avg_tokens_per_second),
-                            borderColor: '#3b82f6',
-                            backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                            fill: true,
-                            tension: 0.3,
-                            pointRadius: 3,
-                        }],
-                    },
-                    options: chartDefaults,
-                });
-            }
+            if (!tpsCanvas) return;
+            this._destroyCharts();
+
+            this.tpsChart = new Chart(tpsCanvas.getContext('2d'), {
+                type: 'line',
+                data: {
+                    labels,
+                    datasets: [{
+                        label: 'Avg Tokens/sec',
+                        data: data.map(d => d.avg_tokens_per_second),
+                        borderColor: '#3b82f6',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 4,
+                        pointHoverRadius: 6,
+                    }],
+                },
+                options: chartDefaults,
+            });
 
             // Cost/Requests chart
             const costCanvas = document.getElementById('cost-chart');
-            if (costCanvas) {
-                if (this.costChart) this.costChart.destroy();
-                this.costChart = new Chart(costCanvas, {
-                    type: 'bar',
-                    data: {
-                        labels,
-                        datasets: [
-                            {
-                                label: 'Requests',
-                                data: data.map(d => d.requests),
-                                backgroundColor: 'rgba(59, 130, 246, 0.6)',
-                                yAxisID: 'y',
-                            },
-                            {
-                                label: 'Cost ($)',
-                                data: data.map(d => d.cost_usd),
-                                backgroundColor: 'rgba(16, 185, 129, 0.6)',
-                                yAxisID: 'y1',
-                            },
-                        ],
-                    },
-                    options: {
-                        ...chartDefaults,
-                        scales: {
-                            ...chartDefaults.scales,
-                            y: { ...chartDefaults.scales.y, position: 'left' },
-                            y1: {
-                                ...chartDefaults.scales.y,
-                                position: 'right',
-                                grid: { drawOnChartArea: false },
-                            },
+            if (!costCanvas) return;
+
+            this.costChart = new Chart(costCanvas.getContext('2d'), {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [
+                        {
+                            label: 'Requests',
+                            data: data.map(d => d.requests),
+                            backgroundColor: 'rgba(59, 130, 246, 0.6)',
+                            yAxisID: 'y',
+                        },
+                        {
+                            label: 'Cost ($)',
+                            data: data.map(d => d.cost_usd),
+                            backgroundColor: 'rgba(16, 185, 129, 0.6)',
+                            yAxisID: 'y1',
+                        },
+                    ],
+                },
+                options: {
+                    ...chartDefaults,
+                    scales: {
+                        ...chartDefaults.scales,
+                        y: { ...chartDefaults.scales.y, position: 'left', beginAtZero: true },
+                        y1: {
+                            ...chartDefaults.scales.y,
+                            position: 'right',
+                            beginAtZero: true,
+                            grid: { drawOnChartArea: false },
                         },
                     },
-                });
-            }
+                },
+            });
         },
 
         /* ---------- Helpers for template ---------- */
