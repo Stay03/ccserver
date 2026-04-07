@@ -88,6 +88,100 @@ async function fetchTimeseries(params = {}) {
     return resp.json();
 }
 
+/* ---------- Chart Manager (outside Alpine) ---------- */
+
+const ChartManager = {
+    tpsChart: null,
+    costChart: null,
+
+    destroy() {
+        if (this.tpsChart) { this.tpsChart.destroy(); this.tpsChart = null; }
+        if (this.costChart) { this.costChart.destroy(); this.costChart = null; }
+    },
+
+    render(timeseriesData, isDark) {
+        if (!timeseriesData || !timeseriesData.length) {
+            this.destroy();
+            return;
+        }
+
+        const tpsEl = document.getElementById('tps-chart');
+        const costEl = document.getElementById('cost-chart');
+        if (!tpsEl || !costEl) return;
+
+        this.destroy();
+
+        const labels = timeseriesData.map(d => d.period);
+        const gridColor = isDark ? 'rgba(148, 163, 184, 0.1)' : 'rgba(15, 23, 42, 0.06)';
+        const textColor = isDark ? '#94a3b8' : '#475569';
+
+        const baseOptions = {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 300 },
+            plugins: {
+                legend: { labels: { color: textColor, font: { size: 12 } } },
+            },
+            scales: {
+                x: { ticks: { color: textColor, font: { size: 11 }, maxRotation: 45 }, grid: { color: gridColor } },
+                y: { ticks: { color: textColor, font: { size: 11 } }, grid: { color: gridColor }, beginAtZero: true },
+            },
+        };
+
+        this.tpsChart = new Chart(tpsEl, {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Avg Tokens/sec',
+                    data: timeseriesData.map(d => d.avg_tokens_per_second),
+                    borderColor: '#3b82f6',
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 4,
+                    pointHoverRadius: 6,
+                }],
+            },
+            options: baseOptions,
+        });
+
+        this.costChart = new Chart(costEl, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [
+                    {
+                        label: 'Requests',
+                        data: timeseriesData.map(d => d.requests),
+                        backgroundColor: 'rgba(59, 130, 246, 0.6)',
+                        yAxisID: 'y',
+                    },
+                    {
+                        label: 'Cost ($)',
+                        data: timeseriesData.map(d => d.cost_usd),
+                        backgroundColor: 'rgba(16, 185, 129, 0.6)',
+                        yAxisID: 'y1',
+                    },
+                ],
+            },
+            options: {
+                ...baseOptions,
+                scales: {
+                    ...baseOptions.scales,
+                    y: { ...baseOptions.scales.y, position: 'left', beginAtZero: true },
+                    y1: {
+                        ...baseOptions.scales.y,
+                        position: 'right',
+                        beginAtZero: true,
+                        grid: { drawOnChartArea: false },
+                    },
+                },
+            },
+        });
+    },
+};
+
 /* ---------- Alpine.js Dashboard Component ---------- */
 
 function dashboardApp() {
@@ -100,6 +194,7 @@ function dashboardApp() {
         error: null,
         activeTab: 'overview',
         isDark: document.documentElement.classList.contains('dark'),
+        chartsReady: false,
 
         // Filters
         modelFilter: '',
@@ -126,16 +221,22 @@ function dashboardApp() {
         autoRefresh: false,
         refreshInterval: null,
 
-        // Charts
-        tpsChart: null,
-        costChart: null,
-
         async init() {
+            // Load data first
             await this._loadData();
-            // Defer chart rendering until Alpine has fully rendered the DOM
-            this.$nextTick(() => {
-                setTimeout(() => this._drawChartsIfReady(), 200);
-            });
+            // Mark charts ready after Alpine finishes DOM render
+            this.chartsReady = true;
+        },
+
+        // Watch for chart rendering triggers
+        renderCharts() {
+            if (!this.chartsReady) return;
+            if (!this.timeseries || !this.timeseries.data.length) return;
+            try {
+                ChartManager.render(this.timeseries.data, this.isDark);
+            } catch (e) {
+                console.warn('Chart render deferred:', e.message);
+            }
         },
 
         async setTimeRange(label) {
@@ -192,12 +293,12 @@ function dashboardApp() {
 
         async refresh() {
             await this._loadData();
-            this._drawChartsIfReady();
+            this.renderCharts();
         },
 
         async changePage(newPage) {
             this.page = newPage;
-            await this.refresh();
+            await this._loadData();
         },
 
         async applyFilters() {
@@ -223,105 +324,10 @@ function dashboardApp() {
             }
         },
 
-        /* ---------- Chart rendering ---------- */
-
-        _drawChartsIfReady() {
-            if (!this.timeseries || !this.timeseries.data.length) return;
-            const tpsEl = document.getElementById('tps-chart');
-            const costEl = document.getElementById('cost-chart');
-            if (!tpsEl || !costEl || !tpsEl.parentElement || !costEl.parentElement) return;
-            // Check parent has dimensions (not hidden/collapsed)
-            if (tpsEl.parentElement.offsetHeight === 0) return;
-            try {
-                this._drawCharts();
-            } catch (e) {
-                console.error('Chart render error:', e);
-            }
-        },
-
-        _drawCharts() {
-            const data = this.timeseries.data;
-            const labels = data.map(d => d.period);
-            const isDark = this.isDark;
-            const gridColor = isDark ? 'rgba(148, 163, 184, 0.1)' : 'rgba(15, 23, 42, 0.06)';
-            const textColor = isDark ? '#94a3b8' : '#475569';
-
-            const chartDefaults = {
-                responsive: true,
-                maintainAspectRatio: false,
-                animation: { duration: 300 },
-                plugins: {
-                    legend: { labels: { color: textColor, font: { size: 12 } } },
-                },
-                scales: {
-                    x: { ticks: { color: textColor, font: { size: 11 }, maxRotation: 45 }, grid: { color: gridColor } },
-                    y: { ticks: { color: textColor, font: { size: 11 } }, grid: { color: gridColor }, beginAtZero: true },
-                },
-            };
-
-            // Destroy existing charts
-            if (this.tpsChart) { this.tpsChart.destroy(); this.tpsChart = null; }
-            if (this.costChart) { this.costChart.destroy(); this.costChart = null; }
-
-            // TPS chart
-            const tpsEl = document.getElementById('tps-chart');
-            if (tpsEl) {
-                this.tpsChart = new Chart(tpsEl, {
-                    type: 'line',
-                    data: {
-                        labels,
-                        datasets: [{
-                            label: 'Avg Tokens/sec',
-                            data: data.map(d => d.avg_tokens_per_second),
-                            borderColor: '#3b82f6',
-                            backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                            fill: true,
-                            tension: 0.3,
-                            pointRadius: 4,
-                            pointHoverRadius: 6,
-                        }],
-                    },
-                    options: chartDefaults,
-                });
-            }
-
-            // Cost/Requests chart
-            const costEl = document.getElementById('cost-chart');
-            if (costEl) {
-                this.costChart = new Chart(costEl, {
-                    type: 'bar',
-                    data: {
-                        labels,
-                        datasets: [
-                            {
-                                label: 'Requests',
-                                data: data.map(d => d.requests),
-                                backgroundColor: 'rgba(59, 130, 246, 0.6)',
-                                yAxisID: 'y',
-                            },
-                            {
-                                label: 'Cost ($)',
-                                data: data.map(d => d.cost_usd),
-                                backgroundColor: 'rgba(16, 185, 129, 0.6)',
-                                yAxisID: 'y1',
-                            },
-                        ],
-                    },
-                    options: {
-                        ...chartDefaults,
-                        scales: {
-                            ...chartDefaults.scales,
-                            y: { ...chartDefaults.scales.y, position: 'left', beginAtZero: true },
-                            y1: {
-                                ...chartDefaults.scales.y,
-                                position: 'right',
-                                beginAtZero: true,
-                                grid: { drawOnChartArea: false },
-                            },
-                        },
-                    },
-                });
-            }
+        toggleDarkMode() {
+            this.isDark = !this.isDark;
+            toggleTheme();
+            this.renderCharts();
         },
 
         /* ---------- Helpers for template ---------- */
