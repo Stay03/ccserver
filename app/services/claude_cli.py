@@ -36,6 +36,7 @@ def _build_command(request: MessagesRequest, streaming: bool) -> list[str]:
         "--no-session-persistence",
         "--tools",
         "",
+        "--no-chrome",
     ]
     if streaming:
         cmd.append("--verbose")
