@@ -31,7 +31,7 @@ class SystemBlock(BaseModel):
 
 class MessagesRequest(BaseModel):
     model: str = ""
-    messages: list[Message]
+    messages: list[Message] = Field(min_length=1)
     system: str | list[SystemBlock] | None = None
     max_tokens: int = 4096
     stream: bool = False

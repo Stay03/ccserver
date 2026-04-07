@@ -4,10 +4,12 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from collections.abc import AsyncGenerator
+from datetime import datetime, timezone
 
 from app.config import settings
-from app.models.metrics import build_metrics_from_result
+from app.models.metrics import RequestMetrics, build_metrics_from_result
 from app.models.request import MessagesRequest
 from app.models.response import MessagesResponse
 from app.services.converter import (
@@ -73,6 +75,14 @@ async def run_claude(request: MessagesRequest) -> MessagesResponse:
 
     output = stdout.decode(errors="replace").strip()
     if not output:
+        metrics = RequestMetrics(
+            request_id=f"msg_{uuid.uuid4().hex}",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            model=model,
+            is_error=True,
+            stop_reason="error",
+        )
+        await _insert_metrics(metrics)
         raise RuntimeError("Claude CLI returned empty output")
 
     result_event = json.loads(output)

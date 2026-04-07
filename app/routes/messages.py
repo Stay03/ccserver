@@ -60,6 +60,9 @@ async def create_message(
         elif "authentication" in error_msg.lower() or "logged in" in error_msg.lower() or "login" in error_msg.lower():
             status = 401
             error_type = "authentication_error"
+        elif "model" in error_msg.lower():
+            status = 400
+            error_type = "invalid_request_error"
         else:
             status = 500
             error_type = "api_error"

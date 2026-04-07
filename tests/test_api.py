@@ -223,3 +223,22 @@ async def test_health_endpoint(client):
 async def test_missing_messages_field(client):
     resp = await client.post("/v1/messages", json={"model": "sonnet", "max_tokens": 100})
     assert resp.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_empty_messages_rejected(client):
+    resp = await client.post("/v1/messages", json=_make_request_body(messages=[]))
+    assert resp.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_invalid_model_returns_400(client):
+    with patch("app.routes.messages.run_claude", new_callable=AsyncMock) as mock_run:
+        mock_run.side_effect = RuntimeError(
+            "Claude CLI error: There's an issue with the selected model (nonexistent)."
+        )
+
+        resp = await client.post("/v1/messages", json=_make_request_body(model="nonexistent"))
+        assert resp.status_code == 400
+        data = resp.json()
+        assert data["error"]["type"] == "invalid_request_error"
