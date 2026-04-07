@@ -133,14 +133,14 @@ function dashboardApp() {
             await this.refresh();
         },
 
-        setTimeRange(label) {
+        async setTimeRange(label) {
             this.timeRange = label;
             const preset = this.timeRangeOptions.find(o => o.label === label);
             if (preset) {
                 this.bucketFilter = preset.bucket;
             }
             this.page = 1;
-            this.refresh();
+            await this.refresh();
         },
 
         _getSinceParam() {
@@ -178,7 +178,8 @@ function dashboardApp() {
                 this.logs = logs;
                 this.timeseries = timeseries;
 
-                this.$nextTick(() => this.renderCharts());
+                // Use setTimeout to ensure canvas elements are fully rendered
+                setTimeout(() => this.renderCharts(), 50);
             } catch (e) {
                 this.error = e.message;
                 console.error('Dashboard refresh error:', e);
