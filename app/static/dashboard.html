@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CCServer Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+
+<div x-data="dashboardApp()" x-init="init()" class="min-h-screen">
+
+    <!-- Navigation -->
+    <nav class="nav-bar sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-14">
+                <div class="flex items-center gap-3">
+                    <h1 class="text-lg font-semibold" style="color: var(--text-primary)">CCServer</h1>
+                    <span class="text-xs px-2 py-0.5 rounded-full" style="background: var(--bg-tertiary); color: var(--text-muted)">Dashboard</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <!-- Auto-refresh toggle -->
+                    <button @click="toggleAutoRefresh()"
+                            class="refresh-btn flex items-center gap-1.5"
+                            :class="{ 'border-green-500 text-green-500': autoRefresh }">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" :class="{ 'animate-spin': autoRefresh }" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                        </svg>
+                        <span class="hidden sm:inline text-xs" x-text="autoRefresh ? 'Auto' : 'Auto'"></span>
+                    </button>
+                    <!-- Manual refresh -->
+                    <button @click="refresh()" class="refresh-btn" :class="{ spinning: loading }">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                        </svg>
+                    </button>
+                    <!-- Theme toggle -->
+                    <button @click="toggleTheme()" class="theme-toggle">
+                        <svg x-show="document.documentElement.classList.contains('dark')" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+                        </svg>
+                        <svg x-show="!document.documentElement.classList.contains('dark')" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main content -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+
+        <!-- Error banner -->
+        <div x-show="error" x-cloak class="mb-6 p-4 rounded-lg" style="background: rgba(239, 68, 68, 0.1); border: 1px solid var(--danger); color: var(--danger)">
+            <p class="text-sm font-medium" x-text="'Error: ' + error"></p>
+        </div>
+
+        <!-- Filters bar -->
+        <div class="flex flex-wrap items-center gap-3 mb-6">
+            <select x-model="modelFilter" @change="applyFilters()" class="filter-select">
+                <option value="">All Models</option>
+                <template x-for="m in modelList" :key="m">
+                    <option :value="m" x-text="shortModel(m)"></option>
+                </template>
+            </select>
+            <select x-model="originFilter" @change="applyFilters()" class="filter-select">
+                <option value="">All Origins</option>
+                <option value="proxy">Proxy</option>
+                <option value="benchmark">Benchmark</option>
+            </select>
+            <select x-model="streamFilter" @change="applyFilters()" class="filter-select">
+                <option value="">All Types</option>
+                <option value="true">Streaming</option>
+                <option value="false">Non-streaming</option>
+            </select>
+            <select x-model="bucketFilter" @change="applyFilters()" class="filter-select">
+                <option value="hour">Hourly</option>
+                <option value="day">Daily</option>
+            </select>
+            <button x-show="modelFilter || originFilter || streamFilter" @click="clearFilters()"
+                    class="text-xs px-2 py-1 rounded" style="color: var(--accent); cursor: pointer;">
+                Clear filters
+            </button>
+        </div>
+
+        <!-- Stats Cards -->
+        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+            <!-- Requests -->
+            <div class="stat-card">
+                <div class="stat-label">Requests</div>
+                <div class="stat-value" x-text="stats ? formatNumber(stats.total_requests) : '-'"></div>
+                <div class="stat-detail" x-text="stats ? stats.total_errors + ' errors' : ''"></div>
+            </div>
+            <!-- Cost -->
+            <div class="stat-card">
+                <div class="stat-label">Total Cost</div>
+                <div class="stat-value" x-text="stats ? formatCost(stats.total_cost_usd) : '-'"></div>
+                <div class="stat-detail" x-text="stats ? formatNumber(stats.total_output_tokens) + ' out tokens' : ''"></div>
+            </div>
+            <!-- Avg TPS -->
+            <div class="stat-card">
+                <div class="stat-label">Avg TPS</div>
+                <div class="stat-value" x-text="stats ? formatTps(stats.avg_tokens_per_second) : '-'"></div>
+                <div class="stat-detail">tokens/sec</div>
+            </div>
+            <!-- TTFT -->
+            <div class="stat-card">
+                <div class="stat-label">Avg TTFT</div>
+                <div class="stat-value" x-text="stats?.avg_ttft_ms ? formatDuration(stats.avg_ttft_ms) : '-'"></div>
+                <div class="stat-detail">time to first token</div>
+            </div>
+            <!-- p50 Latency -->
+            <div class="stat-card">
+                <div class="stat-label">p50 Latency</div>
+                <div class="stat-value" x-text="stats?.p50_duration_ms ? formatDuration(stats.p50_duration_ms) : '-'"></div>
+                <div class="stat-detail" x-text="stats?.p95_duration_ms ? 'p95: ' + formatDuration(stats.p95_duration_ms) : ''"></div>
+            </div>
+            <!-- Cache Tokens -->
+            <div class="stat-card">
+                <div class="stat-label">Cache Tokens</div>
+                <div class="stat-value" x-text="stats ? formatNumber(stats.total_cache_read_tokens) : '-'"></div>
+                <div class="stat-detail" x-text="stats ? formatNumber(stats.total_cache_creation_tokens) + ' created' : ''"></div>
+            </div>
+        </div>
+
+        <!-- By Model Breakdown -->
+        <div x-show="stats && Object.keys(stats.by_model || {}).length > 0" class="mb-6">
+            <h2 class="text-sm font-semibold mb-3" style="color: var(--text-secondary)">By Model</h2>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                <template x-for="[model, data] in Object.entries(stats?.by_model || {})" :key="model">
+                    <div class="model-row flex items-center justify-between">
+                        <div>
+                            <div class="text-sm font-medium" style="color: var(--text-primary)" x-text="shortModel(model)"></div>
+                            <div class="text-xs" style="color: var(--text-muted)" x-text="data.requests + ' requests'"></div>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-sm font-semibold" style="color: var(--text-primary)" x-text="formatTps(data.avg_tps) + ' tps'"></div>
+                            <div class="text-xs" style="color: var(--text-muted)" x-text="formatCost(data.cost_usd)"></div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+
+        <!-- Charts -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+            <div class="chart-container">
+                <h3 class="text-sm font-semibold mb-3" style="color: var(--text-secondary)">Throughput</h3>
+                <div style="height: 240px;">
+                    <canvas id="tps-chart"></canvas>
+                </div>
+            </div>
+            <div class="chart-container">
+                <h3 class="text-sm font-semibold mb-3" style="color: var(--text-secondary)">Requests & Cost</h3>
+                <div style="height: 240px;">
+                    <canvas id="cost-chart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Generations Table -->
+        <div class="chart-container">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-sm font-semibold" style="color: var(--text-secondary)">Generations</h3>
+                <span class="text-xs" style="color: var(--text-muted)" x-text="logs ? logs.pagination.total + ' total' : ''"></span>
+            </div>
+
+            <!-- Table -->
+            <div class="overflow-x-auto">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Model</th>
+                            <th>Tokens</th>
+                            <th>Cost</th>
+                            <th>Speed</th>
+                            <th>Latency</th>
+                            <th>TTFT</th>
+                            <th>Type</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="row in (logs?.data || [])" :key="row.request_id">
+                            <tr>
+                                <td class="whitespace-nowrap" x-text="formatTimestamp(row.timestamp)"></td>
+                                <td x-text="shortModel(row.model)"></td>
+                                <td>
+                                    <span x-text="row.input_tokens" style="color: var(--text-muted)"></span>
+                                    <span style="color: var(--text-muted)"> → </span>
+                                    <span x-text="row.output_tokens"></span>
+                                </td>
+                                <td x-text="formatCost(row.total_cost_usd)"></td>
+                                <td>
+                                    <span x-text="formatTps(row.tokens_per_second)"></span>
+                                    <span class="text-xs" style="color: var(--text-muted)"> tps</span>
+                                </td>
+                                <td x-text="formatDuration(row.duration_ms)"></td>
+                                <td x-text="row.ttft_ms ? formatDuration(row.ttft_ms) : '-'"></td>
+                                <td>
+                                    <span class="text-xs px-1.5 py-0.5 rounded"
+                                          :style="row.is_stream
+                                            ? 'background: rgba(59,130,246,0.1); color: var(--accent)'
+                                            : 'background: var(--bg-tertiary); color: var(--text-muted)'"
+                                          x-text="row.is_stream ? 'stream' : 'sync'"></span>
+                                </td>
+                                <td>
+                                    <span class="text-xs px-1.5 py-0.5 rounded"
+                                          :style="row.is_error
+                                            ? 'background: rgba(239,68,68,0.1); color: var(--danger)'
+                                            : 'background: rgba(16,185,129,0.1); color: var(--success)'"
+                                          x-text="row.is_error ? 'error' : 'ok'"></span>
+                                </td>
+                            </tr>
+                        </template>
+                        <tr x-show="!logs?.data?.length && !loading">
+                            <td colspan="9" class="text-center py-8" style="color: var(--text-muted)">No data yet</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Pagination -->
+            <div x-show="totalPages > 1" class="flex items-center justify-center gap-1.5 mt-4">
+                <button @click="changePage(page - 1)" :disabled="page <= 1" class="page-btn">←</button>
+                <template x-for="p in pageNumbers" :key="p">
+                    <button x-show="p !== '...'"
+                            @click="changePage(p)"
+                            :class="{ active: p === page }"
+                            class="page-btn"
+                            x-text="p"></button>
+                    <span x-show="p === '...'" class="px-1" style="color: var(--text-muted)">...</span>
+                </template>
+                <button @click="changePage(page + 1)" :disabled="page >= totalPages" class="page-btn">→</button>
+            </div>
+        </div>
+
+    </main>
+</div>
+
+<script src="/static/dashboard.js"></script>
+</body>
+</html>

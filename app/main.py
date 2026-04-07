@@ -1,8 +1,11 @@
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app import database
 from app.config import settings
@@ -34,10 +37,18 @@ app.include_router(router)
 app.include_router(analytics_router)
 app.include_router(benchmark_router)
 
+_static_dir = Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
 
 @app.get("/")
 async def health():
     return {"status": "ok", "claude_binary": settings.get_claude_path()}
+
+
+@app.get("/dashboard")
+async def dashboard():
+    return FileResponse(str(_static_dir / "dashboard.html"))
 
 
 if __name__ == "__main__":
