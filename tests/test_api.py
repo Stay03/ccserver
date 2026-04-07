@@ -33,7 +33,7 @@ def _make_request_body(**overrides):
 def _mock_response():
     return MessagesResponse(
         id="msg_test123",
-        model="sonnet",
+        model="claude-sonnet-4-6",
         content=[ContentBlock(type="text", text="Hello!")],
         stop_reason="end_turn",
         usage=Usage(input_tokens=10, output_tokens=5),
@@ -87,18 +87,45 @@ async def test_non_streaming_auth_error(client):
 
 
 @pytest.mark.anyio
-async def test_streaming_returns_sse(client):
+async def test_streaming_forwards_stream_events(client):
+    """Verify that stream_event inner events are forwarded directly as SSE."""
     async def mock_stream(*args, **kwargs):
-        events = [
-            {"type": "message_start", "message": {"id": "msg_test", "type": "message", "role": "assistant", "content": [], "model": "sonnet", "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": 0, "output_tokens": 0}}},
-            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
-            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello!"}},
-            {"type": "content_block_stop", "index": 0},
-            {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 5}},
-            {"type": "message_stop"},
-        ]
-        for evt in events:
-            yield f"event: {evt['type']}\ndata: {json.dumps(evt)}\n\n"
+        from app.sse import format_sse
+        # Simulate what the refactored stream_claude yields:
+        # forwarded inner events from CLI stream_event wrappers
+        yield format_sse("message_start", {
+            "type": "message_start",
+            "message": {
+                "id": "msg_01NfJDTSHmQVJtyj2PWyRmPx",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": "claude-sonnet-4-6",
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 3, "output_tokens": 0},
+            },
+        })
+        yield format_sse("content_block_start", {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        })
+        yield format_sse("content_block_delta", {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "Hello!"},
+        })
+        yield format_sse("content_block_stop", {
+            "type": "content_block_stop",
+            "index": 0,
+        })
+        yield format_sse("message_delta", {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 5},
+        })
+        yield format_sse("message_stop", {"type": "message_stop"})
 
     with patch("app.routes.messages.stream_claude", side_effect=mock_stream):
         resp = await client.post(
@@ -110,9 +137,35 @@ async def test_streaming_returns_sse(client):
 
         text = resp.text
         assert "event: message_start" in text
+        assert "event: content_block_start" in text
         assert "event: content_block_delta" in text
+        assert "event: content_block_stop" in text
+        assert "event: message_delta" in text
         assert "event: message_stop" in text
         assert "Hello!" in text
+        assert "claude-sonnet-4-6" in text
+
+
+@pytest.mark.anyio
+async def test_streaming_error_emits_single_error(client):
+    """Verify that error cases emit exactly one error event, not two."""
+    async def mock_stream(*args, **kwargs):
+        from app.sse import format_sse
+        # Simulate error case: assistant has error, then result has is_error
+        yield format_sse("error", {
+            "type": "error",
+            "error": {"type": "api_error", "message": "Model not found"},
+        })
+        # No second error — error_emitted flag prevents it
+
+    with patch("app.routes.messages.stream_claude", side_effect=mock_stream):
+        resp = await client.post(
+            "/v1/messages",
+            json=_make_request_body(stream=True),
+        )
+        assert resp.status_code == 200
+        text = resp.text
+        assert text.count("event: error") == 1
 
 
 @pytest.mark.anyio

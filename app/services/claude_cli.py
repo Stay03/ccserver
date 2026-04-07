@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import uuid
 from collections.abc import AsyncGenerator
 
 from app.config import settings
@@ -11,7 +10,6 @@ from app.models.request import MessagesRequest
 from app.models.response import MessagesResponse
 from app.services.converter import (
     extract_system_text,
-    map_stop_reason,
     messages_to_prompt,
     parse_cli_result,
 )
@@ -31,6 +29,7 @@ def _build_command(request: MessagesRequest, streaming: bool) -> list[str]:
         "stream-json" if streaming else "json",
         "--model",
         model,
+        "--no-session-persistence",
     ]
     if streaming:
         cmd.append("--verbose")
@@ -84,7 +83,6 @@ async def run_claude(request: MessagesRequest) -> MessagesResponse:
 
 
 async def stream_claude(request: MessagesRequest) -> AsyncGenerator[str, None]:
-    model = request.model or settings.default_model
     cmd = _build_command(request, streaming=True)
 
     try:
@@ -100,9 +98,7 @@ async def stream_claude(request: MessagesRequest) -> AsyncGenerator[str, None]:
         })
         return
 
-    msg_id = f"msg_{uuid.uuid4().hex[:24]}"
-    previous_text = ""
-    content_block_started = False
+    error_emitted = False
 
     try:
         async for raw_line in proc.stdout:
@@ -118,88 +114,32 @@ async def stream_claude(request: MessagesRequest) -> AsyncGenerator[str, None]:
 
             event_type = event.get("type")
 
-            if event_type == "system":
-                cli_model = event.get("model", model)
-                yield format_sse("message_start", {
-                    "type": "message_start",
-                    "message": {
-                        "id": msg_id,
-                        "type": "message",
-                        "role": "assistant",
-                        "content": [],
-                        "model": cli_model,
-                        "stop_reason": None,
-                        "stop_sequence": None,
-                        "usage": {"input_tokens": 0, "output_tokens": 0},
-                    },
-                })
+            if event_type == "stream_event":
+                inner = event.get("event")
+                if inner and "type" in inner:
+                    yield format_sse(inner["type"], inner)
 
             elif event_type == "assistant":
-                message = event.get("message", {})
                 error = event.get("error")
-
                 if error:
+                    msg = event.get("message", {})
+                    content = msg.get("content", [])
+                    error_text = content[0].get("text", "") if content else str(error)
                     yield format_sse("error", {
                         "type": "error",
-                        "error": {"type": "authentication_error", "message": error},
+                        "error": {"type": "api_error", "message": error_text},
                     })
-                    continue
-
-                content_blocks = message.get("content", [])
-                current_text = ""
-                for block in content_blocks:
-                    if block.get("type") == "text":
-                        current_text += block.get("text", "")
-
-                delta = current_text[len(previous_text):]
-                if delta:
-                    if not content_block_started:
-                        yield format_sse("content_block_start", {
-                            "type": "content_block_start",
-                            "index": 0,
-                            "content_block": {"type": "text", "text": ""},
-                        })
-                        content_block_started = True
-
-                    yield format_sse("content_block_delta", {
-                        "type": "content_block_delta",
-                        "index": 0,
-                        "delta": {"type": "text_delta", "text": delta},
-                    })
-                    previous_text = current_text
+                    error_emitted = True
 
             elif event_type == "result":
-                if event.get("is_error"):
-                    error_msg = event.get("result", "Unknown error")
-                    if not content_block_started:
-                        yield format_sse("content_block_start", {
-                            "type": "content_block_start",
-                            "index": 0,
-                            "content_block": {"type": "text", "text": ""},
-                        })
-                        content_block_started = True
-                    yield format_sse("content_block_delta", {
-                        "type": "content_block_delta",
-                        "index": 0,
-                        "delta": {"type": "text_delta", "text": error_msg},
+                if event.get("is_error") and not error_emitted:
+                    yield format_sse("error", {
+                        "type": "error",
+                        "error": {"type": "api_error", "message": event.get("result", "Unknown error")},
                     })
 
-                if content_block_started:
-                    yield format_sse("content_block_stop", {
-                        "type": "content_block_stop",
-                        "index": 0,
-                    })
-
-                usage = event.get("usage", {})
-                stop_reason = map_stop_reason(event.get("stop_reason"))
-
-                yield format_sse("message_delta", {
-                    "type": "message_delta",
-                    "delta": {"stop_reason": stop_reason, "stop_sequence": None},
-                    "usage": {"output_tokens": usage.get("output_tokens", 0)},
-                })
-
-                yield format_sse("message_stop", {"type": "message_stop"})
+            elif event_type in ("system", "rate_limit_event"):
+                pass
 
     except asyncio.TimeoutError:
         yield format_sse("error", {

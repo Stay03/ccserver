@@ -5,6 +5,7 @@ from app.services.converter import (
     map_stop_reason,
     messages_to_prompt,
     parse_cli_result,
+    resolve_model,
 )
 
 
@@ -73,17 +74,31 @@ class TestMessagesToPrompt:
 
 
 class TestMapStopReason:
-    def test_stop_sequence_maps_to_end_turn(self):
-        assert map_stop_reason("stop_sequence") == "end_turn"
-
     def test_none_maps_to_end_turn(self):
         assert map_stop_reason(None) == "end_turn"
+
+    def test_end_turn_passes_through(self):
+        assert map_stop_reason("end_turn") == "end_turn"
 
     def test_max_tokens_passes_through(self):
         assert map_stop_reason("max_tokens") == "max_tokens"
 
-    def test_unknown_maps_to_end_turn(self):
-        assert map_stop_reason("something_else") == "end_turn"
+    def test_any_value_passes_through(self):
+        assert map_stop_reason("stop_sequence") == "stop_sequence"
+
+
+class TestResolveModel:
+    def test_resolves_from_model_usage(self):
+        event = {"modelUsage": {"claude-sonnet-4-6": {"inputTokens": 3}}}
+        assert resolve_model(event, "sonnet") == "claude-sonnet-4-6"
+
+    def test_falls_back_when_empty(self):
+        event = {"modelUsage": {}}
+        assert resolve_model(event, "sonnet") == "sonnet"
+
+    def test_falls_back_when_missing(self):
+        event = {}
+        assert resolve_model(event, "opus") == "opus"
 
 
 class TestParseCliResult:
@@ -93,26 +108,42 @@ class TestParseCliResult:
             "subtype": "success",
             "is_error": False,
             "result": "Hello! How can I help?",
-            "stop_reason": "stop_sequence",
-            "session_id": "abc123def456789012345678",
-            "usage": {"input_tokens": 10, "output_tokens": 5},
+            "stop_reason": "end_turn",
+            "session_id": "50f85a80-7ef8-4ce9-8163-2c64db7e19e4",
+            "total_cost_usd": 0.020567,
+            "duration_ms": 1517,
+            "duration_api_ms": 1421,
+            "usage": {
+                "input_tokens": 3,
+                "output_tokens": 12,
+                "cache_creation_input_tokens": 4552,
+                "cache_read_input_tokens": 11027,
+            },
+            "modelUsage": {
+                "claude-sonnet-4-6": {
+                    "inputTokens": 3,
+                    "outputTokens": 12,
+                    "costUSD": 0.020567,
+                }
+            },
         }
         response = parse_cli_result(event, "sonnet")
-        assert response.model == "sonnet"
+        assert response.model == "claude-sonnet-4-6"
         assert response.role == "assistant"
         assert response.type == "message"
         assert len(response.content) == 1
         assert response.content[0].text == "Hello! How can I help?"
         assert response.stop_reason == "end_turn"
-        assert response.usage.input_tokens == 10
-        assert response.usage.output_tokens == 5
-        assert response.id.startswith("msg_")
+        assert response.usage.input_tokens == 3
+        assert response.usage.output_tokens == 12
+        assert response.id == "msg_50f85a80-7ef8-4ce9-8163-2c64db7e19e4"
 
     def test_result_with_no_usage(self):
         event = {"type": "result", "result": "hi", "session_id": "x"}
         response = parse_cli_result(event, "opus")
         assert response.usage.input_tokens == 0
         assert response.usage.output_tokens == 0
+        assert response.model == "opus"
 
     def test_result_with_no_session_id(self):
         event = {"type": "result", "result": "hi"}

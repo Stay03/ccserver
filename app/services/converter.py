@@ -46,23 +46,29 @@ def messages_to_prompt(messages: list[Message]) -> str:
 
 
 def map_stop_reason(cli_stop_reason: str | None) -> str:
-    if cli_stop_reason in ("stop_sequence", None):
+    if cli_stop_reason is None:
         return "end_turn"
-    if cli_stop_reason == "max_tokens":
-        return "max_tokens"
-    return "end_turn"
+    return cli_stop_reason
+
+
+def resolve_model(result_event: dict, fallback: str) -> str:
+    model_usage = result_event.get("modelUsage", {})
+    if model_usage:
+        return next(iter(model_usage))
+    return fallback
 
 
 def parse_cli_result(result_event: dict, model: str) -> MessagesResponse:
+    resolved = resolve_model(result_event, model)
     session_id = result_event.get("session_id", "")
-    msg_id = f"msg_{session_id[:24]}" if session_id else f"msg_{uuid.uuid4().hex[:24]}"
+    msg_id = f"msg_{session_id}" if session_id else f"msg_{uuid.uuid4().hex}"
     result_text = result_event.get("result", "")
     usage_data = result_event.get("usage", {})
     stop_reason = map_stop_reason(result_event.get("stop_reason"))
 
     return MessagesResponse(
         id=msg_id,
-        model=model,
+        model=resolved,
         content=[ContentBlock(type="text", text=result_text)],
         stop_reason=stop_reason,
         usage=Usage(
