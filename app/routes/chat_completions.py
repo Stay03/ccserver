@@ -70,6 +70,22 @@ async def chat_completions(
         key = authorization[7:]
     _check_api_key(key)
 
+    # Log incoming request
+    msg_count = len(request.messages)
+    roles = [m.role for m in request.messages]
+    total_chars = sum(len(m.content) for m in request.messages)
+    logger.info(
+        "chat_completions_request: model=%s messages=%d roles=%s total_chars=%d stream=%s",
+        request.model, msg_count, roles, total_chars, request.stream,
+    )
+    # Log last message content preview
+    if request.messages:
+        last = request.messages[-1]
+        logger.info(
+            "chat_completions_last_message: role=%s content_preview=%s",
+            last.role, last.content[:300] if last.content else "",
+        )
+
     anthropic_request = _openai_to_anthropic(request)
 
     if request.stream:
@@ -106,6 +122,14 @@ async def chat_completions(
                 total_tokens=response.usage.input_tokens + response.usage.output_tokens,
             ),
         )
+
+        logger.info(
+            "chat_completions_response: id=%s model=%s tokens=%d/%d finish=%s content_preview=%s",
+            response.id, response.model,
+            response.usage.input_tokens, response.usage.output_tokens,
+            response.stop_reason, text[:200],
+        )
+
         return JSONResponse(content=openai_response.model_dump())
 
     except RuntimeError as e:
