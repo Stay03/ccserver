@@ -1,0 +1,11 @@
+[project]
+name = "claude-server"
+version = "0.1.0"
+description = "Anthropic API-compatible server powered by Claude Code CLI"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+]
