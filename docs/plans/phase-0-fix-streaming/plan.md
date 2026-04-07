@@ -1,4 +1,4 @@
-# Phase 0: Fix Streaming Implementation
+# Phase 0: Fix Streaming + Quick Pre-Fixes
 
 ## Problem
 The CLI already emits proper Anthropic-format SSE events as `stream_event` wrappers, but our code ignores them. Instead, it:
@@ -6,7 +6,7 @@ The CLI already emits proper Anthropic-format SSE events as `stream_event` wrapp
 2. **Diffs accumulated text** from `assistant` events to compute deltas (hacky, lossy)
 3. **Manually constructs** `content_block_stop`, `message_delta`, `message_stop` from the `result` event
 
-The correct approach: just **forward `stream_event.event` directly** as SSE.
+Also includes quick pre-fixes for issues found during review.
 
 ## Required flags (verified from live testing)
 
@@ -21,16 +21,16 @@ The correct approach: just **forward `stream_event.event` directly** as SSE.
 ## What the CLI emits with both flags (confirmed)
 
 ```
-1. {"type":"system", ...}                                          → metadata only, SKIP
-2. {"type":"stream_event","event":{"type":"message_start",...}}     → FORWARD
+1. {"type":"system", ...}                                            → SKIP (metadata only)
+2. {"type":"stream_event","event":{"type":"message_start",...}}       → FORWARD
 3. {"type":"stream_event","event":{"type":"content_block_start",...}} → FORWARD
 4. {"type":"stream_event","event":{"type":"content_block_delta",...}} → FORWARD (repeated)
-5. {"type":"assistant","message":{...}}                             → SKIP (redundant snapshot)
-6. {"type":"stream_event","event":{"type":"content_block_stop",...}} → FORWARD
-7. {"type":"stream_event","event":{"type":"message_delta",...}}     → FORWARD (usage + stop_reason)
-8. {"type":"stream_event","event":{"type":"message_stop"}}         → FORWARD
-9. {"type":"rate_limit_event",...}                                  → SKIP/LOG
-10. {"type":"result",...}                                           → metrics only (Phase 1)
+5. {"type":"assistant","message":{...}}                               → SKIP (redundant snapshot)
+6. {"type":"stream_event","event":{"type":"content_block_stop",...}}  → FORWARD
+7. {"type":"stream_event","event":{"type":"message_delta",...}}       → FORWARD (usage + stop_reason)
+8. {"type":"stream_event","event":{"type":"message_stop"}}           → FORWARD
+9. {"type":"rate_limit_event",...}                                    → SKIP
+10. {"type":"result",...}                                             → metrics only (Phase 1)
 ```
 
 ## Error case (verified: invalid model)
@@ -39,97 +39,144 @@ When an error occurs, **no `stream_event` events** are emitted. Only:
 - `assistant` with `"error": "invalid_request"` and `model: "<synthetic>"`
 - `result` with `"is_error": true`
 
-This means the error path must still handle the `assistant` event for error messages, or rely on the `result` event's `is_error` flag.
+---
 
 ## Changes
 
-### `app/services/claude_cli.py` — Rewrite `stream_claude()`
+### 1. `app/services/claude_cli.py`
 
-**Before (current — 100+ lines of manual reconstruction):**
-- Handles: `system`, `assistant`, `result`
-- Ignores: `stream_event`, `rate_limit_event`
-- Manually builds SSE events from `assistant` text diffs
+#### `_build_command()` changes:
+- Add `--no-session-persistence` (prevents 12K+ session files/month accumulating on disk)
+- Keep `--verbose` and `--include-partial-messages` for streaming
 
-**After (clean — ~50 lines of forwarding):**
+#### `stream_claude()` — full rewrite:
+
 ```python
-async def stream_claude(request):
+async def stream_claude(request: MessagesRequest) -> AsyncGenerator[str, None]:
+    model = request.model or settings.default_model
     cmd = _build_command(request, streaming=True)
-    proc = await asyncio.create_subprocess_exec(...)
 
-    async for raw_line in proc.stdout:
-        line = raw_line.decode(errors="replace").strip()
-        if not line:
-            continue
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        yield format_sse("error", {
+            "type": "error",
+            "error": {"type": "api_error", "message": f"Claude CLI not found at: {settings.get_claude_path()}"},
+        })
+        return
 
-        event_type = event.get("type")
+    error_emitted = False
 
-        if event_type == "stream_event":
-            # Forward the inner Anthropic event directly as SSE
-            inner = event["event"]
-            yield format_sse(inner["type"], inner)
+    try:
+        async for raw_line in proc.stdout:
+            line = raw_line.decode(errors="replace").strip()
+            if not line:
+                continue
 
-        elif event_type == "assistant":
-            # In error cases, stream_event events don't appear.
-            # Check for error field and emit error SSE.
-            error = event.get("error")
-            if error:
-                msg = event.get("message", {})
-                content = msg.get("content", [])
-                error_text = content[0].get("text", "") if content else str(error)
-                yield format_sse("error", {
-                    "type": "error",
-                    "error": {"type": "api_error", "message": error_text},
-                })
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                logger.warning("Non-JSON line from CLI: %s", line[:200])
+                continue
 
-        elif event_type == "result":
-            # If is_error and no stream_events were emitted, emit error
-            if event.get("is_error"):
-                yield format_sse("error", {
-                    "type": "error",
-                    "error": {"type": "api_error", "message": event.get("result", "Unknown error")},
-                })
-            # Phase 1 will add metrics capture here
+            event_type = event.get("type")
 
-        elif event_type in ("system", "rate_limit_event"):
-            # system: metadata only, message_start comes via stream_event
-            # rate_limit_event: informational, don't forward
-            pass
+            if event_type == "stream_event":
+                inner = event.get("event")
+                if inner and "type" in inner:
+                    yield format_sse(inner["type"], inner)
+
+            elif event_type == "assistant":
+                # Only relevant in error cases (no stream_events emitted)
+                error = event.get("error")
+                if error:
+                    msg = event.get("message", {})
+                    content = msg.get("content", [])
+                    error_text = content[0].get("text", "") if content else str(error)
+                    yield format_sse("error", {
+                        "type": "error",
+                        "error": {"type": "api_error", "message": error_text},
+                    })
+                    error_emitted = True
+
+            elif event_type == "result":
+                # Emit error ONLY if not already emitted from assistant event
+                if event.get("is_error") and not error_emitted:
+                    yield format_sse("error", {
+                        "type": "error",
+                        "error": {"type": "api_error", "message": event.get("result", "Unknown error")},
+                    })
+                # Phase 1 will add metrics capture here
+
+            elif event_type in ("system", "rate_limit_event"):
+                pass
+
+    except asyncio.TimeoutError:
+        yield format_sse("error", {
+            "type": "error",
+            "error": {"type": "api_error", "message": "Request timed out"},
+        })
+    finally:
+        if proc.returncode is None:
+            proc.kill()
+            await proc.wait()
 ```
 
-**Keep in `_build_command()`:**
-- Keep `--verbose` (required)
-- Keep `--include-partial-messages` (required for `stream_event` events)
+Key fixes vs original plan:
+- **Issue 1 fixed**: `error_emitted` flag prevents double error emission
+- **Issue 2 fixed**: `event.get("event")` with `if inner and "type" in inner` safety check
+- **Issue 4 fixed**: `finally` block with process cleanup preserved
+- **Issue 5 fixed**: `FileNotFoundError` try/except preserved
 
-### `tests/test_api.py` — Update streaming test
+### 2. `app/services/converter.py`
 
-Update `test_streaming_returns_sse` to mock forwarding `stream_event` inner events.
+#### Simplify `map_stop_reason()`:
+CLI returns `"end_turn"` directly (verified). Simplify to pass-through with only `None` handling:
 
-Add tests:
-- `test_streaming_error_invalid_model` — error case with no stream_events
-- `test_streaming_forwards_real_events` — verify inner events are forwarded directly
+```python
+def map_stop_reason(cli_stop_reason: str | None) -> str:
+    if cli_stop_reason is None:
+        return "end_turn"
+    return cli_stop_reason
+```
 
-## What this fixes
-- Proper `message_start` with real model name, message ID, and initial usage from the API
-- Proper text deltas (no more string diffing)
-- Proper `message_delta` with accurate usage and stop_reason from the API
-- Simpler, more maintainable code
+#### Extract resolved model from `modelUsage`:
+```python
+def resolve_model(result_event: dict, fallback: str) -> str:
+    model_usage = result_event.get("modelUsage", {})
+    if model_usage:
+        return next(iter(model_usage))  # first key is the resolved model name
+    return fallback
+```
 
-## What this enables for later phases
-- **Phase 1 TTFT**: Timestamp when first `stream_event` with inner `content_block_delta` is forwarded
-- **Phase 1 metrics**: `result` event handler is clean place to capture cost/duration
-- **Phase 3 benchmark**: Cleaner streaming consumption for benchmark measurement
+Use in `parse_cli_result()`: `model=resolve_model(result_event, model)`
+
+### 3. `tests/test_api.py`
+
+- Update `test_streaming_returns_sse` mock to yield forwarded `stream_event` inner events
+- Add `test_streaming_error_no_double_emit` — verify only one error event on failure
+- Add `test_streaming_cli_not_found` — verify FileNotFoundError handling
+
+### 4. `tests/test_converter.py`
+
+- Update `test_stop_sequence_maps_to_end_turn` → `test_end_turn_passes_through`
+- Update test data to use `"stop_reason": "end_turn"` (matching real CLI output)
+- Update `test_successful_result` to verify resolved model name
+
+---
 
 ## Verification
-1. Run tests: `python -m pytest tests/ -v`
+1. `python -m pytest tests/ -v` — all pass
 2. Deploy to droplet, test streaming:
    ```bash
    curl -X POST https://claude.lawexa.com/v1/messages \
      -H "Content-Type: application/json" \
      -d '{"model":"sonnet","messages":[{"role":"user","content":"say hello"}],"max_tokens":100,"stream":true}'
    ```
-3. Verify SSE events match Anthropic format (message_start has real model/id from API, not synthetic)
-4. Test error case — should get error SSE event, not hang
+3. Verify SSE events have real model ID (`claude-sonnet-4-6`), real message ID, real usage
+4. Test error: send `"model":"nonexistent"` — should get single error event, not hang
+5. Check `~/.claude/sessions/` on droplet — no new session files created
