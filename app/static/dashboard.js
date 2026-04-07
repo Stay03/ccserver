@@ -224,8 +224,14 @@ function dashboardApp() {
                 return;
             }
 
-            // Wait for next animation frame to ensure canvases are in DOM
-            requestAnimationFrame(() => this._drawCharts());
+            // Delay to ensure DOM is fully laid out and wrappers have dimensions
+            setTimeout(() => {
+                try {
+                    this._drawCharts();
+                } catch (e) {
+                    console.error('Chart render error:', e);
+                }
+            }, 100);
         },
 
         _destroyCharts() {
@@ -238,6 +244,8 @@ function dashboardApp() {
             if (!wrapper) return null;
             wrapper.innerHTML = '';
             const canvas = document.createElement('canvas');
+            canvas.style.width = '100%';
+            canvas.style.height = '100%';
             wrapper.appendChild(canvas);
             return canvas;
         },

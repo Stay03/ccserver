@@ -240,12 +240,11 @@
             <div x-show="totalPages > 1" class="flex items-center justify-center gap-1.5 mt-4">
                 <button @click="changePage(page - 1)" :disabled="page <= 1" class="page-btn">←</button>
                 <template x-for="p in pageNumbers" :key="p">
-                    <button x-show="p !== '...'"
-                            @click="changePage(p)"
-                            :class="{ active: p === page }"
-                            class="page-btn"
+                    <button @click="p !== '...' && changePage(p)"
+                            :class="p === page ? 'page-btn active' : (p === '...' ? 'px-1' : 'page-btn')"
+                            :disabled="p === '...'"
+                            :style="p === '...' ? 'color: var(--text-muted); cursor: default; border: none; background: none;' : ''"
                             x-text="p"></button>
-                    <span x-show="p === '...'" class="px-1" style="color: var(--text-muted)">...</span>
                 </template>
                 <button @click="changePage(page + 1)" :disabled="page >= totalPages" class="page-btn">→</button>
             </div>
