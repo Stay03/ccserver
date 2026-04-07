@@ -234,22 +234,6 @@ function dashboardApp() {
             }, 100);
         },
 
-        _destroyCharts() {
-            if (this.tpsChart) { this.tpsChart.destroy(); this.tpsChart = null; }
-            if (this.costChart) { this.costChart.destroy(); this.costChart = null; }
-        },
-
-        _freshCanvas(wrapperId) {
-            const wrapper = document.getElementById(wrapperId);
-            if (!wrapper) return null;
-            wrapper.innerHTML = '';
-            const canvas = document.createElement('canvas');
-            canvas.style.width = '100%';
-            canvas.style.height = '100%';
-            wrapper.appendChild(canvas);
-            return canvas;
-        },
-
         _drawCharts() {
             const data = this.timeseries.data;
             const labels = data.map(d => d.period);
@@ -270,67 +254,69 @@ function dashboardApp() {
                 },
             };
 
-            this._destroyCharts();
+            // Destroy existing charts
+            if (this.tpsChart) { this.tpsChart.destroy(); this.tpsChart = null; }
+            if (this.costChart) { this.costChart.destroy(); this.costChart = null; }
 
             // TPS chart
-            const tpsCanvas = this._freshCanvas('tps-chart-wrapper');
-            if (!tpsCanvas) return;
-
-            this.tpsChart = new Chart(tpsCanvas, {
-                type: 'line',
-                data: {
-                    labels,
-                    datasets: [{
-                        label: 'Avg Tokens/sec',
-                        data: data.map(d => d.avg_tokens_per_second),
-                        borderColor: '#3b82f6',
-                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                        fill: true,
-                        tension: 0.3,
-                        pointRadius: 4,
-                        pointHoverRadius: 6,
-                    }],
-                },
-                options: chartDefaults,
-            });
+            const tpsEl = document.getElementById('tps-chart');
+            if (tpsEl) {
+                this.tpsChart = new Chart(tpsEl, {
+                    type: 'line',
+                    data: {
+                        labels,
+                        datasets: [{
+                            label: 'Avg Tokens/sec',
+                            data: data.map(d => d.avg_tokens_per_second),
+                            borderColor: '#3b82f6',
+                            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                            fill: true,
+                            tension: 0.3,
+                            pointRadius: 4,
+                            pointHoverRadius: 6,
+                        }],
+                    },
+                    options: chartDefaults,
+                });
+            }
 
             // Cost/Requests chart
-            const costCanvas = this._freshCanvas('cost-chart-wrapper');
-            if (!costCanvas) return;
-
-            this.costChart = new Chart(costCanvas, {
-                type: 'bar',
-                data: {
-                    labels,
-                    datasets: [
-                        {
-                            label: 'Requests',
-                            data: data.map(d => d.requests),
-                            backgroundColor: 'rgba(59, 130, 246, 0.6)',
-                            yAxisID: 'y',
-                        },
-                        {
-                            label: 'Cost ($)',
-                            data: data.map(d => d.cost_usd),
-                            backgroundColor: 'rgba(16, 185, 129, 0.6)',
-                            yAxisID: 'y1',
-                        },
-                    ],
-                },
-                options: {
-                    ...chartDefaults,
-                    scales: {
-                        ...chartDefaults.scales,
-                        y: { ...chartDefaults.scales.y, position: 'left', beginAtZero: true },
-                        y1: {
-                            ...chartDefaults.scales.y,
-                            position: 'right',
-                            beginAtZero: true,
-                            grid: { drawOnChartArea: false },
+            const costEl = document.getElementById('cost-chart');
+            if (costEl) {
+                this.costChart = new Chart(costEl, {
+                    type: 'bar',
+                    data: {
+                        labels,
+                        datasets: [
+                            {
+                                label: 'Requests',
+                                data: data.map(d => d.requests),
+                                backgroundColor: 'rgba(59, 130, 246, 0.6)',
+                                yAxisID: 'y',
+                            },
+                            {
+                                label: 'Cost ($)',
+                                data: data.map(d => d.cost_usd),
+                                backgroundColor: 'rgba(16, 185, 129, 0.6)',
+                                yAxisID: 'y1',
+                            },
+                        ],
+                    },
+                    options: {
+                        ...chartDefaults,
+                        scales: {
+                            ...chartDefaults.scales,
+                            y: { ...chartDefaults.scales.y, position: 'left', beginAtZero: true },
+                            y1: {
+                                ...chartDefaults.scales.y,
+                                position: 'right',
+                                beginAtZero: true,
+                                grid: { drawOnChartArea: false },
+                            },
                         },
                     },
-                },
-            });
+                });
+            }
         },
 
         /* ---------- Helpers for template ---------- */
