@@ -131,7 +131,11 @@ function dashboardApp() {
         costChart: null,
 
         async init() {
-            await this.refresh();
+            await this._loadData();
+            // Defer chart rendering until Alpine has fully rendered the DOM
+            this.$nextTick(() => {
+                setTimeout(() => this._drawChartsIfReady(), 200);
+            });
         },
 
         async setTimeRange(label) {
@@ -151,7 +155,7 @@ function dashboardApp() {
             return since.toISOString();
         },
 
-        async refresh() {
+        async _loadData() {
             this.loading = true;
             this.error = null;
             try {
@@ -178,14 +182,17 @@ function dashboardApp() {
                 this.stats = stats;
                 this.logs = logs;
                 this.timeseries = timeseries;
-
-                this.renderCharts();
             } catch (e) {
                 this.error = e.message;
                 console.error('Dashboard refresh error:', e);
             } finally {
                 this.loading = false;
             }
+        },
+
+        async refresh() {
+            await this._loadData();
+            this._drawChartsIfReady();
         },
 
         async changePage(newPage) {
@@ -218,20 +225,18 @@ function dashboardApp() {
 
         /* ---------- Chart rendering ---------- */
 
-        renderCharts() {
-            if (!this.timeseries || !this.timeseries.data.length) {
-                this._destroyCharts();
-                return;
+        _drawChartsIfReady() {
+            if (!this.timeseries || !this.timeseries.data.length) return;
+            const tpsEl = document.getElementById('tps-chart');
+            const costEl = document.getElementById('cost-chart');
+            if (!tpsEl || !costEl || !tpsEl.parentElement || !costEl.parentElement) return;
+            // Check parent has dimensions (not hidden/collapsed)
+            if (tpsEl.parentElement.offsetHeight === 0) return;
+            try {
+                this._drawCharts();
+            } catch (e) {
+                console.error('Chart render error:', e);
             }
-
-            // Delay to ensure DOM is fully laid out and wrappers have dimensions
-            setTimeout(() => {
-                try {
-                    this._drawCharts();
-                } catch (e) {
-                    console.error('Chart render error:', e);
-                }
-            }, 100);
         },
 
         _drawCharts() {
