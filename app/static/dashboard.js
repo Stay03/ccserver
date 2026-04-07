@@ -233,10 +233,19 @@ function dashboardApp() {
             if (this.costChart) { this.costChart.destroy(); this.costChart = null; }
         },
 
+        _freshCanvas(wrapperId) {
+            const wrapper = document.getElementById(wrapperId);
+            if (!wrapper) return null;
+            wrapper.innerHTML = '';
+            const canvas = document.createElement('canvas');
+            wrapper.appendChild(canvas);
+            return canvas;
+        },
+
         _drawCharts() {
             const data = this.timeseries.data;
             const labels = data.map(d => d.period);
-            const isDark = document.documentElement.classList.contains('dark');
+            const isDark = this.isDark;
             const gridColor = isDark ? 'rgba(148, 163, 184, 0.1)' : 'rgba(15, 23, 42, 0.06)';
             const textColor = isDark ? '#94a3b8' : '#475569';
 
@@ -253,12 +262,13 @@ function dashboardApp() {
                 },
             };
 
-            // TPS chart
-            const tpsCanvas = document.getElementById('tps-chart');
-            if (!tpsCanvas) return;
             this._destroyCharts();
 
-            this.tpsChart = new Chart(tpsCanvas.getContext('2d'), {
+            // TPS chart
+            const tpsCanvas = this._freshCanvas('tps-chart-wrapper');
+            if (!tpsCanvas) return;
+
+            this.tpsChart = new Chart(tpsCanvas, {
                 type: 'line',
                 data: {
                     labels,
@@ -277,10 +287,10 @@ function dashboardApp() {
             });
 
             // Cost/Requests chart
-            const costCanvas = document.getElementById('cost-chart');
+            const costCanvas = this._freshCanvas('cost-chart-wrapper');
             if (!costCanvas) return;
 
-            this.costChart = new Chart(costCanvas.getContext('2d'), {
+            this.costChart = new Chart(costCanvas, {
                 type: 'bar',
                 data: {
                     labels,
