@@ -1,0 +1,15 @@
+[Unit]
+Description=Claude Code Proxy Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/ccserver
+ExecStart=/root/ccserver/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8082
+Restart=always
+RestartSec=5
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/root/.local/bin
+
+[Install]
+WantedBy=multi-user.target

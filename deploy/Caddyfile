@@ -1,0 +1,3 @@
+claude.lawexa.com {
+    reverse_proxy localhost:8082
+}
