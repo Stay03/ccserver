@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from app import database
 from app.config import settings
 from app.routes.analytics import router as analytics_router
+from app.routes.benchmark import router as benchmark_router
 from app.routes.messages import router
 
 logging.basicConfig(
@@ -31,6 +32,7 @@ app = FastAPI(
 
 app.include_router(router)
 app.include_router(analytics_router)
+app.include_router(benchmark_router)
 
 
 @app.get("/")

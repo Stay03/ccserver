@@ -191,6 +191,112 @@ async def stream_claude(request: MessagesRequest) -> AsyncGenerator[str, None]:
             await proc.wait()
 
 
+async def run_benchmark_request(
+    prompt: str, model: str, max_tokens: int, stream: bool = False,
+) -> RequestMetrics:
+    """Run a single benchmark request. Returns metrics directly, never raises."""
+    from app.models.request import Message
+
+    request = MessagesRequest(
+        model=model,
+        messages=[Message(role="user", content=prompt)],
+        max_tokens=max_tokens,
+        stream=stream,
+    )
+    cmd = _build_command(request, streaming=stream)
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        return _error_metrics(model)
+
+    try:
+        if stream:
+            return await _benchmark_stream(proc, model)
+
+        stdout, _ = await asyncio.wait_for(
+            proc.communicate(), timeout=settings.request_timeout
+        )
+        output = stdout.decode(errors="replace").strip()
+        if not output:
+            metrics = _error_metrics(model)
+            await _insert_metrics(metrics)
+            return metrics
+
+        result_event = json.loads(output)
+        metrics = build_metrics_from_result(
+            result_event, is_stream=False, fallback_model=model, origin="benchmark",
+        )
+        await _insert_metrics(metrics)
+        return metrics
+
+    except asyncio.TimeoutError:
+        proc.kill()
+        metrics = _error_metrics(model)
+        await _insert_metrics(metrics)
+        return metrics
+    finally:
+        if proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+
+
+async def _benchmark_stream(proc, model: str) -> RequestMetrics:
+    """Consume streaming CLI output for benchmark. Track TTFT, return metrics."""
+    start_time = time.monotonic()
+    ttft_ms = None
+    result_event = None
+
+    try:
+        async for raw_line in proc.stdout:
+            line = raw_line.decode(errors="replace").strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            event_type = event.get("type")
+            if event_type == "stream_event":
+                inner = event.get("event", {})
+                if inner.get("type") == "content_block_delta" and ttft_ms is None:
+                    ttft_ms = int((time.monotonic() - start_time) * 1000)
+            elif event_type == "result":
+                result_event = event
+    except Exception:
+        logger.exception("Error during benchmark stream consumption")
+
+    if result_event:
+        metrics = build_metrics_from_result(
+            result_event, is_stream=True, fallback_model=model,
+            ttft_ms=ttft_ms, origin="benchmark",
+        )
+        await _insert_metrics(metrics)
+        return metrics
+
+    metrics = _error_metrics(model, is_stream=True)
+    await _insert_metrics(metrics)
+    return metrics
+
+
+def _error_metrics(model: str, is_stream: bool = False) -> RequestMetrics:
+    """Build minimal error metrics for benchmark failures."""
+    return RequestMetrics(
+        request_id=f"msg_{uuid.uuid4().hex}",
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        model=model,
+        is_error=True,
+        is_stream=is_stream,
+        stop_reason="error",
+        origin="benchmark",
+    )
+
+
 async def _insert_metrics(metrics) -> None:
     """Insert metrics to database. Import here to avoid circular imports at module level."""
     try:

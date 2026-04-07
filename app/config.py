@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     request_timeout: int = 300
     api_key: str = ""
     db_path: str = "claude_proxy.db"
+    benchmark_max_concurrency: int = 10
+    benchmark_max_requests: int = 50
 
     model_config = {"env_file": ".env", "env_prefix": "CLAUDE_PROXY_"}
 
