@@ -36,7 +36,9 @@ def _build_command(request: MessagesRequest, streaming: bool) -> list[str]:
         "--no-session-persistence",
         "--tools",
         "",
-        "--no-chrome",
+        "--mcp-config",
+        '{"mcpServers":{}}',
+        "--strict-mcp-config",
     ]
     if streaming:
         cmd.append("--verbose")
